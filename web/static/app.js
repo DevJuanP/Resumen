@@ -69,6 +69,15 @@
       div.className = "aviso aviso--error";
       div.textContent = estado.error;
       acciones.appendChild(div);
+
+      var reintentar = document.createElement("button");
+      reintentar.type = "button";
+      reintentar.className = "btn";
+      reintentar.textContent = "Reintentar";
+      reintentar.addEventListener("click", function () {
+        lanzar("/nueva", { url: estado.url });
+      });
+      acciones.appendChild(reintentar);
       return;
     }
 
@@ -141,6 +150,7 @@
   }
 
   function lanzar(url, cuerpo) {
+    var urlEnviada = (cuerpo && cuerpo.url) || (campo && campo.value || "").trim();
     mostrarPanel(true);
     inicioLocal = Date.now();
     texto(fase, "Enviando…");
@@ -165,8 +175,28 @@
         acciones.replaceChildren();
         var div = document.createElement("div");
         div.className = "aviso aviso--error";
-        div.textContent = e.message;
+
+        /* `Failed to fetch` es un TypeError de la capa de red: el servidor no
+           respondió. Conviene decirlo así en vez de repetir el texto del
+           navegador, que no explica nada. */
+        var esRed = e instanceof TypeError || /fetch/i.test(e.message || "");
+        div.textContent = esRed
+          ? "No se pudo contactar con el servidor local. Comprueba que " +
+            "`python web.py` siga abierto en la terminal y vuelve a intentarlo."
+          : e.message;
         acciones.appendChild(div);
+
+        if (esRed) {
+          var reintentar = document.createElement("button");
+          reintentar.type = "button";
+          reintentar.className = "btn";
+          reintentar.textContent = "Reintentar";
+          reintentar.addEventListener("click", function () {
+            lanzar("/nueva", { url: urlEnviada });
+          });
+          acciones.appendChild(reintentar);
+        }
+
         texto(fase, "No se pudo iniciar");
         barra.classList.remove("barra__relleno--indeterminada");
         barra.style.width = "0%";

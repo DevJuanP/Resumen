@@ -364,3 +364,53 @@ La prueba fija esos números.
 (caso de `--solo-visor` con la clase ya en disco), cae en `catalogo.buscar_por_url()`, que
 busca por `recording_id`. Sin ese respaldo, el botón «Renovar video» no habría sabido a qué
 clase redirigir.
+
+---
+
+## 18. Incidente del primer uso real (2026-11-06)
+
+Al probar la interfaz con una clase nueva aparecieron dos fallos que las pruebas no cubrían.
+
+### 18.1 El mensaje de error se perdía
+
+`cli.py` escribe los errores con `print(f"\n✗ {e}\n", file=sys.stderr)`. Como `stderr` se
+redirige al mismo flujo que `stdout`, al usuario le llegaba la línea del mensaje **sin el
+`✗`** —una línea suelta después de una en blanco—, y el parser no la reconocía como error.
+
+Resultado: el trabajo terminaba en `error`, pero sin texto. El JavaScript, al no tener nada
+que mostrar, caía en el mensaje genérico del navegador: **«Failed to fetch»**, que culpa a la
+red cuando el problema era el contenido.
+
+**Arreglo:** `es_error_conocido()` reconoce los mensajes que `cli.py` puede emitir sin la
+equis, y `_ultimo_error()` los rescata del búfer al cerrar el trabajo. Además el JS distingue
+un `TypeError` de red de un error real del motor.
+
+### 18.2 Class no publica `transcripts` a tiempo
+
+La clase de `SPTI02423` tenía `transcripts: []` con `status: AVAILABLE`, así que el motor
+respondía «La clase no tiene transcripción utilizable». Pero el artefacto
+`audio_transcript` (WebVTT) **sí existía y estaba completo**.
+
+**Arreglo:** respaldo en `fetch.py` (ver
+[extraccion-class.md](../03-arquitectura/extraccion-class.md#paso-5bis-respaldo-con-el-vtt)).
+Solo se activa si `transcripts` no produjo segmentos.
+
+### 18.3 Resultado real de esa clase
+
+| Dato | Valor |
+|---|---|
+| Duración | 168 min |
+| Segmentos del VTT | 579 (534 del docente) |
+| Bloques | 11 |
+| Llamadas | 14 (11 + 3 de auditoría) |
+| Tiempo | 226 s |
+| Ideas | 91 |
+| Avisos | 22 |
+| Cobertura | **44,1 %** |
+
+La cobertura baja **no es un fallo del resumen**: el VTT tiene huecos de audio de 40 minutos
+seguidos (minutos 100–140) y otros tramos vacíos (80–90). El docente lo menciona al empezar:
+«Esto no había estado grabando la sesión». Sin texto no hay nada que resumir.
+
+Queda como limitación conocida: con el VTT, una clase con audio incompleto produce un
+resumen con menos cobertura, y no hay forma de distinguirlo salvo mirando la transcripción.

@@ -124,6 +124,34 @@ def interpretar(linea: str) -> Avance:
     return Avance()
 
 
+#: Mensajes que `cli.py` escribe a stderr, cuya primera línea pierde el `✗`.
+#: Se reconocen para no perder la causa real cuando el proceso sale con error.
+ERRORES_CONOCIDOS = (
+    "La clase no tiene transcripción utilizable",
+    "No se pudo leer cursos.json",
+    "No hay cursos declarados en cursos.json",
+    "No se pudo asociar",
+    "No existe el curso",
+    "No hay ningún modelo configurado",
+    "No hay datos guardados en",
+    "Falta la transcripción en",
+    "No se reconoció ninguna intervención en",
+)
+
+
+def es_error_conocido(linea: str) -> bool:
+    """¿La línea es el cuerpo de un error del CLI?
+
+    Hace falta porque `print(f"\\n✗ {e}\\n", file=sys.stderr)` deja una línea en
+    blanco y luego el mensaje suelto. Sin esto, el trabajo termina en `error`
+    pero sin texto que enseñar al usuario.
+    """
+    texto = ANSI.sub("", linea).strip()
+    if not texto:
+        return False
+    return any(texto.startswith(patron) for patron in ERRORES_CONOCIDOS)
+
+
 class Partidor:
     """Corta un flujo de texto en líneas aceptando `\\r` y `\\n`.
 
@@ -392,8 +420,12 @@ class Cola:
             self._procesar(t, linea)
 
     def _procesar(self, t: Trabajo, linea: str) -> None:
-        self._anotar(t, ANSI.sub("", linea).strip())
-        self._aplicar(t, interpretar(linea))
+        limpia = ANSI.sub("", linea).strip()
+        self._anotar(t, limpia)
+        avance = interpretar(linea)
+        if es_error_conocido(limpia):
+            avance = Avance(estado="error", error=limpia)
+        self._aplicar(t, avance)
 
     def _finalizar(self, t: Trabajo, codigo: int) -> None:
         with self._candado:
@@ -408,6 +440,15 @@ class Cola:
                 t.error = ""
             else:
                 t.estado = "error"
-                t.error = t.error or "El motor terminó con errores."
+                t.error = t.error or self._ultimo_error(t) or (
+                    f"El motor terminó con código {codigo}.")
                 t.fase_txt = t.error
             t.fin = time.time()
+
+    @staticmethod
+    def _ultimo_error(t: Trabajo) -> str:
+        """Rescata el mensaje del CLI cuando el exit code es lo único que hay."""
+        for linea in reversed(t.salida[-15:]):
+            if es_error_conocido(linea) or linea.startswith("✗"):
+                return linea.lstrip("✗").strip()
+        return ""

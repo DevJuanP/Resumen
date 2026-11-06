@@ -22,7 +22,7 @@ if str(RAIZ) not in sys.path:
 
 from web import catalogo, paginas            # noqa: E402
 from web.trabajos import (                   # noqa: E402
-    ANSI, ARGUMENTOS, Partidor, derivar_ubicacion, interpretar,
+    ANSI, ARGUMENTOS, Partidor, derivar_ubicacion, es_error_conocido, interpretar,
 )
 
 
@@ -100,6 +100,21 @@ class TestInterpretar(unittest.TestCase):
     def test_escritura(self):
         a = interpretar("\033[32m✓ clases\\X\\2026-11-03\\visor.html\033[0m")
         self.assertEqual(a.estado, "escribiendo")
+
+    def test_error_sin_la_equis(self):
+        """`print(f"\\n✗ {e}\\n", file=sys.stderr)` deja el mensaje suelto.
+
+        Regresión: una clase sin transcripción terminaba en `error` pero sin
+        texto, así que la interfaz solo podía mostrar «Failed to fetch».
+        """
+        linea = "La clase no tiene transcripción utilizable."
+        self.assertIsNone(interpretar(linea).estado)
+        self.assertTrue(es_error_conocido(linea))
+
+    def test_error_sin_la_equis_no_confunde_lineas_normales(self):
+        self.assertFalse(es_error_conocido("  PRUEBAS DE SOFTWARE · 136 min"))
+        self.assertFalse(es_error_conocido("  bloques 3/13"))
+        self.assertFalse(es_error_conocido(""))
 
     def test_linea_irrelevante(self):
         a = interpretar("  PRUEBAS DE SOFTWARE · 03/11/2026 · 136 min")
@@ -188,13 +203,17 @@ class TestCatalogoReal(unittest.TestCase):
         cursos = catalogo.escanear()
         if not cursos:
             self.skipTest("no hay clases generadas todavía")
-        self.assertEqual(len(cursos), 1)
-        curso = cursos[0]
-        self.assertEqual(curso.codigo, "DCGS12424")
-        self.assertEqual(len(curso.clases), 1)
+        # Se comprueba la clase conocida, no el número total: el usuario puede
+        # ir añadiendo clases y las pruebas no deben romperse por eso.
+        por_carpeta = {c.carpeta: c for c in cursos}
+        self.assertIn("DCGS12424-Pruebas-de-Software", por_carpeta)
 
-        clase = curso.clases[0]
-        self.assertEqual(clase.dia, "2026-11-03")
+        curso = por_carpeta["DCGS12424-Pruebas-de-Software"]
+        self.assertEqual(curso.codigo, "DCGS12424")
+        clase = next((c for c in curso.clases if c.dia == "2026-11-03"), None)
+        self.assertIsNotNone(clase, "falta la clase del 3 de noviembre")
+
+        self.assertEqual(clase.materia, "PRUEBAS DE SOFTWARE")
         self.assertEqual(clase.ideas, 176)
         self.assertEqual(clase.avisos, 20)
         self.assertAlmostEqual(clase.cobertura, 96.4, places=1)
@@ -202,13 +221,21 @@ class TestCatalogoReal(unittest.TestCase):
         self.assertTrue(clase.tiene_visor)
         self.assertTrue(clase.url.startswith("https://"))
 
+    def test_orden_descendente(self):
+        cursos = catalogo.escanear()
+        for curso in cursos:
+            fechas = [c.dia for c in curso.clases]
+            self.assertEqual(fechas, sorted(fechas, reverse=True),
+                             f"{curso.carpeta} no está ordenado de reciente a antiguo")
+
     def test_buscar_por_url(self):
         cursos = catalogo.escanear()
         if not cursos:
             self.skipTest("no hay clases generadas todavía")
-        url = cursos[0].clases[0].url
-        self.assertEqual(catalogo.buscar_por_url(url),
-                         (cursos[0].carpeta, cursos[0].clases[0].dia))
+        clase = cursos[0].clases[0]
+        if not clase.url:
+            self.skipTest("la clase no guardó la URL")
+        self.assertEqual(catalogo.buscar_por_url(clase.url), (clase.curso, clase.dia))
 
     def test_url_desconocida(self):
         self.assertIsNone(catalogo.buscar_por_url("https://x.com/nada"))
