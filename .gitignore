@@ -1,0 +1,7 @@
+__pycache__/
+*.pyc
+.uuid
+
+# Salida del motor: apuntes y transcripciones de clases reales.
+# No se versiona porque contiene la transcripción con nombres de participantes.
+clases/
