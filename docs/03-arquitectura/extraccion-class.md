@@ -201,6 +201,58 @@ Artefactos disponibles en la clase documentada:
 El proyecto solo usa los dos MP4. Los VTT no se descargan porque la transcripción del `join`
 ya es más rica: incluye el nombre del hablante, que el VTT no siempre trae.
 
+## Paso 5bis: respaldo con el VTT
+
+**Añadido el 2026-11-06 tras un caso real.** Class no rellena `recordingData.transcripts` al
+mismo tiempo que publica el artefacto `audio_transcript`. Hay grabaciones con
+`transcripts: []` y `status: AVAILABLE` que sí tienen el VTT completo.
+
+Sin este respaldo, esas clases fallaban con «La clase no tiene transcripción utilizable»
+aunque su transcripción estuviera disponible desde el primer minuto.
+
+### Cuándo se activa
+
+Solo si `transcripts` no produjo ningún segmento. El camino normal nunca se ve afectado.
+
+### Cómo se parsea
+
+El VTT de Class trae el hablante al principio del texto, en mayúsculas:
+
+```
+WEBVTT
+
+1
+00:00:08.280 --> 00:00:16.490
+ELVER NOEL MAYTA HERNANDEZ: Ya disculpen, estudiantes ahí.
+```
+
+`fetch.segmentos_desde_vtt()` acepta además el formato `<v Nombre>texto</v>` y las comas
+decimales. La decisión de si lo que precede a los dos puntos es un nombre se toma con
+`_parece_nombre()`: más del 80 % de letras en mayúscula. Así «ya dónde van a exponer»
+no se confunde con un hablante.
+
+### Roles
+
+El VTT no distingue docente de estudiante. Se cruza con `students` del `join` comparando el
+primer nombre, porque las dos fuentes abrevian distinto (`ELVER NOEL MAYTA HERNANDEZ` se
+normaliza a `Elver Mayta` en un sitio y `Elver Hernandez` en el otro).
+
+### Coste real medido
+
+Caso: `SPTI02423 PROYECTO INTEGRADOR`, 168 min.
+
+| Dato | VTT | Transcripción normal (136 min) |
+|---|---|---|
+| Cues / intervenciones | 579 | 1419 |
+| Palabras | 5 852 | ~13 000 |
+| Tokens de entrada | ~8 600 | ~19 500 |
+| Cobertura temporal | 99,9 % (llega a 2:47:40) | 100 % |
+| Hablantes distintos | 14 | 2 |
+
+**El VTT es más barato pero menos denso**: 35 palabras por minuto frente a 96. Las ideas
+extraídas serán menos, y el resumen puede quedarse corto en clases donde el docente habla
+mucho y los subtítulos resumen.
+
 ### Detalle de los MP4
 
 Comprobado pidiendo solo los primeros bytes de cada uno:

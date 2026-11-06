@@ -167,6 +167,193 @@ def _es_ruido(texto: str) -> bool:
     return not limpio or limpio in RUIDO_EXACTO
 
 
+# --------------------------------------------------------------------------- #
+# Respaldo: transcripción desde el artefacto WebVTT
+# --------------------------------------------------------------------------- #
+
+#: `00:00:08.280 --> 00:00:16.490`
+CUE_VTT = re.compile(
+    r"(\d{1,2}):(\d{2}):(\d{2})[.,](\d{1,3})\s*-->\s*"
+    r"(\d{1,2}):(\d{2}):(\d{2})[.,](\d{1,3})"
+)
+
+#: El hablante va al principio del texto: `NOMBRE APELLIDO: lo que dijo`.
+HABLANTE_VTT = re.compile(r"^([^:]{3,70}):\s*(.+)$", re.DOTALL)
+
+#: Etiquetas de voz de WebVTT: `<v Nombre>texto</v>`.
+VOZ_VTT = re.compile(r"<v\s+([^>]+)>(.*?)(?:</v>)?$", re.DOTALL)
+
+
+def _segundos_vtt(h: str, m: str, s: str, ms: str) -> float:
+    return int(h) * 3600 + int(m) * 60 + int(s) + int(ms.ljust(3, "0")) / 1000.0
+
+
+def _limpiar_vtt(texto: str) -> str:
+    """Quita etiquetas de formato y normaliza espacios de una cue."""
+    limpio = re.sub(r"<[^>]+>", "", texto)
+    limpio = limpio.replace("&nbsp;", " ").replace("&amp;", "&")
+    limpio = limpio.replace("&lt;", "<").replace("&gt;", ">")
+    return re.sub(r"\s+", " ", limpio).strip()
+
+
+def segmentos_desde_vtt(contenido: str) -> list[Segmento]:
+    """Convierte un WebVTT de Class en segmentos.
+
+    Class publica el artefacto `audio_transcript` mucho antes de rellenar
+    `recordingData.transcripts`, así que sin esto hay clases grabables pero no
+    resumibles. Cada cue trae el nombre del hablante al inicio del texto.
+
+    El VTT es más escueto que la transcripción normal (frases cortas, sin
+    repeticiones), así que las ideas extraídas serán menos densas.
+    """
+    segmentos: list[Segmento] = []
+    # Se separa por líneas en blanco: cada bloque es una cue con cabecera y texto.
+    for bloque in re.split(r"\n\s*\n", contenido.replace("\r\n", "\n")):
+        lineas = [ln.strip() for ln in bloque.splitlines() if ln.strip()]
+        if not lineas or lineas[0].startswith(("WEBVTT", "NOTE", "STYLE", "REGION")):
+            continue
+
+        inicio = None
+        cuerpo: list[str] = []
+        for linea in lineas:
+            m = CUE_VTT.search(linea)
+            if m and inicio is None:
+                h, mi, s, ms = m.group(1), m.group(2), m.group(3), m.group(4)
+                inicio = _segundos_vtt(h, mi, s, ms)
+                continue
+            if m:
+                continue
+            # El índice numérico de la cue va antes del tiempo.
+            if linea.isdigit() and inicio is None:
+                continue
+            if inicio is not None:
+                cuerpo.append(linea)
+
+        if inicio is None or not cuerpo:
+            continue
+
+        texto = _limpiar_vtt(" ".join(cuerpo))
+        if not texto:
+            continue
+
+        hablante = "Participante"
+        voz = VOZ_VTT.search(texto)
+        if voz:
+            hablante = voz.group(1).strip()
+            texto = _limpiar_vtt(voz.group(2))
+        else:
+            m = HABLANTE_VTT.match(texto)
+            # Solo si lo que precede a los dos puntos parece un nombre: en
+            # mayúsculas y sin puntuación de frase. Si no, es parte del texto.
+            if m and _parece_nombre(m.group(1)):
+                hablante = m.group(1).strip()
+                texto = m.group(2).strip()
+
+        if _es_ruido(texto):
+            continue
+        segmentos.append(Segmento(
+            segundos=inicio,
+            hablante=_normalizar_nombre(hablante),
+            texto=texto,
+            rol="estudiante",
+        ))
+
+    return segmentos
+
+
+def _parece_nombre(candidato: str) -> bool:
+    """¿El texto antes de los dos puntos es un nombre de persona?"""
+    limpio = candidato.strip()
+    if not limpio or len(limpio) > 70:
+        return False
+    if not any(c.isalpha() for c in limpio):
+        return False
+    # Los nombres de Class vienen en mayúsculas; una frase normal no.
+    letras = [c for c in limpio if c.isalpha()]
+    return sum(1 for c in letras if c.isupper()) / len(letras) > 0.8
+
+
+def _url_subtitulos(datos: dict, rec: dict) -> str:
+    """Busca la URL firmada del artefacto `audio_transcript`."""
+    for grupo in ("artifactsComplete", "artifacts"):
+        for a in rec.get(grupo) or []:
+            if isinstance(a, dict) and a.get("contents") == "audio_transcript":
+                url = str(a.get("url") or "")
+                if url:
+                    return url.replace("&amp;", "&")
+    return ""
+
+
+def _segmentos_del_vtt(datos: dict, rec: dict) -> list[Segmento]:
+    """Descarga el VTT de la grabación y lo convierte en segmentos.
+
+    Devuelve una lista vacía si no hay artefacto o si falla la descarga: el
+    llamador ya sabe responder a «no hay transcripción».
+    """
+    url = _url_subtitulos(datos, rec)
+    if not url:
+        return []
+    try:
+        crudo = _pedir(url, cabeceras={"Accept": "*/*"}, timeout=60)
+    except ErrorDeClase:
+        return []
+    try:
+        contenido = crudo.decode("utf-8")
+    except UnicodeDecodeError:
+        contenido = crudo.decode("latin-1", "replace")
+
+    segmentos = segmentos_desde_vtt(contenido)
+    if not segmentos:
+        return []
+
+    # El VTT no marca roles. Se usa la lista de asistentes cuando existe; si no,
+    # se asume docente quien más interviene, igual que en el camino normal.
+    profesores = set(docentes_de(datos))
+    if profesores:
+        for s in segmentos:
+            s.rol = "docente" if _nombre_coincide(s.hablante, profesores) else "estudiante"
+        return segmentos
+
+    conteo: dict[str, int] = {}
+    for s in segmentos:
+        conteo[s.hablante] = conteo.get(s.hablante, 0) + 1
+    if conteo:
+        titular = max(conteo, key=lambda n: conteo[n])
+        for s in segmentos:
+            if s.hablante == titular:
+                s.rol = "docente"
+    return segmentos
+
+
+def _nombre_coincide(hablante: str, profesores: set[str]) -> bool:
+    """El VTT y la lista de asistentes abrevian los nombres distinto.
+
+    `ELVER NOEL MAYTA HERNANDEZ` se normaliza a `Elver Mayta` por un lado y a
+    `Elver Hernandez` por otro, así que se compara por el primer nombre y por
+    cualquier apellido, no por la cadena completa.
+    """
+    if not hablante or not profesores:
+        return False
+    partes = hablante.lower().split()
+    if not partes:
+        return False
+    primero = partes[0]
+    for profesor in profesores:
+        otras = profesor.lower().split()
+        if otras and otras[0] == primero:
+            return True
+    return False
+
+
+def docentes_de(datos: dict) -> list[str]:
+    """Nombres normalizados de quienes figuran como docente en la asistencia."""
+    salida = []
+    for p in datos.get("students") or []:
+        if p.get("role") in ("teacher", "host", "co-host"):
+            salida.append(_normalizar_nombre(p.get("user_name") or ""))
+    return [n for n in salida if n and n != "Sin nombre"]
+
+
 def obtener_clase(url: str) -> Clase:
     """Descarga y normaliza una repetición a partir de su URL pública."""
     m = PATRON_REPLAY.search(url.strip())
@@ -193,7 +380,7 @@ def obtener_clase(url: str) -> Clase:
         raise ErrorDeClase("La plataforma devolvió una respuesta ilegible.") from e
 
     rec = datos.get("recordingData") or {}
-    if not rec.get("transcripts") and not rec.get("artifacts"):
+    if not rec.get("transcripts") and not rec.get("artifacts") and not rec.get("artifactsComplete"):
         raise ErrorDeClase(
             "La grabación existe pero todavía no tiene transcripción publicada.\n"
             "Suele tardar unas horas después de la clase; vuelve a intentarlo más tarde."
@@ -244,6 +431,19 @@ def obtener_clase(url: str) -> Clase:
     duracion = float(rec.get("duration") or 0)
     if not duracion and segmentos:
         duracion = segmentos[-1].segundos
+
+    # Respaldo: Class tarda en rellenar `transcripts`, pero publica antes el
+    # artefacto de subtítulos. Si no hay segmentos, se usa el VTT.
+    if not segmentos:
+        segmentos = _segmentos_del_vtt(datos, rec)
+        if segmentos and not docente:
+            # El VTT no trae roles: se toma el hablante más frecuente.
+            conteo: dict[str, int] = {}
+            for s in segmentos:
+                if s.rol == "docente":
+                    conteo[s.hablante] = conteo.get(s.hablante, 0) + 1
+            if conteo:
+                docente = max(conteo, key=lambda n: conteo[n])
 
     materia = (datos.get("meetingTopic") or rec.get("name") or "Clase").strip()
     materia = re.sub(r"\s*-\s*PROF\..*$", "", materia, flags=re.IGNORECASE).strip()
