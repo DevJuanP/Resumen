@@ -1,0 +1,23 @@
+{
+  "_nota": "Registro de cursos. La plataforma Class no expone el codigo del curso, solo el nombre de la materia, asi que aqui se declara. 'carpeta' es el nombre de la subcarpeta dentro de clases/. 'alias' ayuda a reconocer la materia: basta que una coincida para asignar la clase.",
+  "cursos": [
+    {
+      "codigo": "SPTI02423",
+      "nombre": "Proyecto Integrador",
+      "carpeta": "SPTI02423-Proyecto-Integrador",
+      "alias": ["PROYECTO INTEGRADOR"]
+    },
+    {
+      "codigo": "DCGS12424",
+      "nombre": "Pruebas de Software",
+      "carpeta": "DCGS12424-Pruebas-de-Software",
+      "alias": ["PRUEBAS DE SOFTWARE"]
+    },
+    {
+      "codigo": "PROG04696",
+      "nombre": "Desarrollo de Aplicaciones Móviles II",
+      "carpeta": "PROG04696-Desarrollo-de-Aplicaciones-Moviles-II",
+      "alias": ["DESARROLLO DE APLICACIONES MOVILES II", "APLICACIONES MOVILES II"]
+    }
+  ]
+}

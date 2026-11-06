@@ -1,0 +1,6 @@
+{
+  "_nota": "Endpoint compatible con la API de OpenAI. Sin api_key usa la variable de api_key_env; si no hay ninguna, se toma el proveedor configurado en OpenCode (resolviendo referencias {file:...} y {env:...}).",
+  "base_url": "https://api.deploy.com/api/v1",
+  "model": "deepseek-ai/deepseek-v4.1-flash-1017",
+  "reasoning_effort": "low"
+}
